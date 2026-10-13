@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VientoBQ Live · Esfuerzo aerodinámico ciclista · Barranquilla</title>
+  <meta name="description" content="Terminal de navegación técnica para predecir el esfuerzo aerodinámico de ciclistas en Barranquilla con viento a 10 m en tiempo real (Open-Meteo): túnel de viento virtual, timeline de 12 h y hora óptima de salida." />
+  <meta name="theme-color" content="#09090b" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="preconnect" href="https://api.open-meteo.com" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="app">
+
+  <!-- ============================================================
+       BLOQUE 1 · RESUMEN Y CONTROL
+       ============================================================ -->
+  <header class="topbar" aria-label="Resumen y control">
+    <div class="cell cell--brand">
+      <svg class="brand__mark" viewBox="0 0 32 32" aria-hidden="true">
+        <rect x="0.5" y="0.5" width="31" height="31" rx="2" />
+        <path d="M7 12 H19 a3 3 0 1 0 -3 -3" />
+        <path d="M7 18 H23 a3 3 0 1 1 -3 3" />
+      </svg>
+      <div class="brand__text">
+        <span class="brand__name">VientoBQ<span class="brand__tag">LIVE</span></span>
+        <span class="brand__sub">Aero · Ciclismo · 10 m AGL</span>
+      </div>
+    </div>
+
+    <div class="cell cell--select">
+      <label class="lbl" for="location-select">Punto de medición</label>
+      <div class="select">
+        <select id="location-select" name="location"></select>
+        <svg class="select__chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+      </div>
+    </div>
+
+    <div class="cell cell--route">
+      <span class="lbl">Ruta de ejemplo</span>
+      <p class="route">
+        <span class="route__pt" id="route-origin">—</span>
+        <span class="route__arrow" aria-label="hacia">→</span>
+        <span class="route__pt" id="route-dest">—</span>
+        <span class="route__dist" id="route-dist">—</span>
+      </p>
+    </div>
+
+    <div class="cell cell--status">
+      <span class="lbl">Estado de la ruta</span>
+      <div class="status" id="status" data-level="idle" role="status">
+        <span class="status__led" aria-hidden="true"></span>
+        <strong class="status__text" id="status-text">Sincronizando…</strong>
+      </div>
+      <span class="status__detail" id="status-detail">—</span>
+    </div>
+
+    <div class="cell cell--actions">
+      <div class="live" id="live-indicator" data-state="loading">
+        <span class="live__dot" aria-hidden="true"></span>
+        <span class="live__label" id="live-label">CONECTANDO</span>
+        <time class="live__time" id="last-updated">—</time>
+      </div>
+      <div class="actions">
+        <button class="btn" id="refresh-btn" type="button" aria-label="Actualizar datos ahora">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.34 5.66" /><path d="M20 4v7h-7" /></svg>
+          <span class="btn__text">Actualizar</span>
+        </button>
+        <button class="btn btn--watch" id="watch-btn" type="button" aria-label="Activar Modo Smartwatch" title="Modo Smartwatch táctico (OLED)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="4" width="12" height="16" rx="3" stroke-width="2"/><circle cx="12" cy="12" r="4" stroke-width="1.8"/><path d="M12 10v2l1.5 1.5" stroke-width="1.8"/></svg>
+          <span class="btn__text">Modo Reloj</span>
+        </button>
+        <button class="btn" id="export-btn" type="button" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12" /><path d="M7 10l5 5 5-5" /><path d="M4 21h16" /></svg>
+          <span class="btn__text">CSV</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="banner" id="error-banner" role="alert" hidden>
+    <span class="banner__tag">ERR</span>
+    <p id="error-text">No se pudo contactar a Open-Meteo.</p>
+    <button class="btn btn--sm" id="retry-btn" type="button">Reintentar</button>
+  </div>
+
+  <!-- ============================================================
+       BLOQUE 2 · TELEMETRÍA + TÚNEL DE VIENTO VIRTUAL
+       ============================================================ -->
+  <main class="stage" id="main" aria-busy="true">
+    <h1 class="sr-only">VientoBQ Live — esfuerzo aerodinámico de ciclistas en Barranquilla</h1>
+
+    <aside class="telemetry" aria-label="Telemetría de viento">
+      <section class="tcard" id="card-speed" data-level="idle">
+        <header class="tcard__head">
+          <h2 class="lbl">Velocidad del viento</h2>
+          <span class="tcard__hint">10 m</span>
+        </header>
+        <div class="speed-group">
+          <p class="tcard__value"><span class="num" id="speed-val">—</span><span class="unit">km/h</span></p>
+          <span class="gust-text" id="gust-badge" data-level="idle">Ráfaga máx: <span id="gust-val">—</span> km/h</span>
+        </div>
+        <div class="meter" aria-hidden="true">
+          <span class="meter__fill" id="speed-meter"></span>
+          <span class="meter__tick" style="--at:37.5%"></span>
+          <span class="meter__tick" style="--at:62.5%"></span>
+        </div>
+        <p class="meter__scale" aria-hidden="true"><span>0</span><span>15</span><span>25</span><span>40 km/h</span></p>
+      </section>
+
+      <section class="tcard" id="card-power" data-level="idle">
+        <header class="tcard__head">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <h2 class="lbl">Densidad de potencia eólica</h2>
+            <div class="info-tooltip" tabindex="0">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+              <div class="info-tooltip__pop" aria-label="P sobre A igual a un medio por rho por v al cubo">
+                ½ · 1.18 · <span id="power-v">—</span>³ = ½ · 1.18 · <span id="power-v3">—</span>
+              </div>
+            </div>
+          </div>
+          <span class="tcard__hint">P/A</span>
+        </header>
+        <p class="tcard__value"><span class="num" id="power-wm2">—</span><span class="unit">W/m²</span></p>
+      </section>
+
+      <section class="tcard tcard--impact" aria-label="Carga aerodinámica sobre el ciclista">
+        <header class="tcard__head">
+          <h2 class="lbl">Carga sobre el ciclista</h2>
+          <span class="tcard__hint" id="rider-ref">25 km/h · CdA 0.32</span>
+        </header>
+        
+        <div class="impact-grid">
+          <div class="impact-box">
+            <span class="impact-box__lbl">Fuerza Aero.</span>
+            <strong class="impact-box__val" id="t-force">—</strong>
+            <span class="impact-box__sub" id="t-delta">—</span>
+          </div>
+          <div class="impact-box">
+            <span class="impact-box__lbl">Potencia Extra</span>
+            <strong class="impact-box__val" id="t-power">—</strong>
+            <span class="impact-box__sub">esfuerzo adicional</span>
+          </div>
+        </div>
+
+        <div class="vec-list">
+          <div class="vec-row"><span>Comp. frontal</span><strong id="t-head">—</strong></div>
+          <div class="vec-row"><span>Comp. lateral</span><strong id="t-cross">—</strong></div>
+          <div class="vec-row"><span>Viento aparente</span><strong id="t-app">—</strong></div>
+          <div class="vec-row"><span>Trabajo en ruta</span><strong id="t-work">—</strong></div>
+        </div>
+      </section>
+    </aside>
+
+    <section class="tunnel-panel" aria-labelledby="tunnel-title">
+      <header class="tunnel-panel__head">
+        <div class="view-toggle" aria-label="Alternar vista">
+          <button class="btn btn--toggle is-active" id="btn-view-map">Mapa de Corrientes</button>
+          <button class="btn btn--toggle" id="btn-view-tunnel">Túnel Cenital</button>
+          <button class="btn btn--toggle" id="btn-view-safety">Guía de Ráfagas</button>
+        </div>
+        <ul class="key" aria-label="Escala de color de ráfagas">
+          <li data-level="ok"><i></i>&lt; 15 km/h</li>
+          <li data-level="warn"><i></i>15–25</li>
+          <li data-level="danger"><i></i>&gt; 25</li>
+        </ul>
+      </header>
+
+      <div class="tunnel-wrap" id="tunnel-wrap" data-view="map">
+        <!-- Capa 0: Mapa Geográfico (Leaflet) -->
+        <div id="leaflet-map" class="tunnel__map" aria-hidden="false"></div>
+        
+        <!-- Capa 0.5: Guía de Seguridad (Acordeón) -->
+        <div class="tunnel__safety" id="safety-panel" aria-hidden="true">
+          <div class="accordion" id="safety-accordion">
+            
+            <!-- PANEL 1: FRENTE -->
+            <details class="acc-item" name="safety-acc" open>
+              <summary class="acc-head">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                  <svg class="s-icon" style="stroke: var(--danger)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
+                  <span class="acc-title">Viento de Frente <span class="acc-sub">(En contra)</span></span>
+                </div>
+                <svg class="acc-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+              </summary>
+              <div class="acc-body">
+                <div class="risk-tier">
+                  <div class="risk-head"><span class="s-tag s-tag--warn">Moderado</span> <span class="risk-speed">15–25 km/h</span></div>
+                  <ul class="s-list">
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                      <span>Flexiona los codos y baja el torso para reducir la resistencia.</span>
+                    </li>
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                      <span>Pon marchas suaves con cadencia alta para proteger las rodillas.</span>
+                    </li>
+                  </ul>
+                </div>
+                <div class="risk-tier">
+                  <div class="risk-head"><span class="s-tag s-tag--idle">Alto</span> <span class="risk-speed">25–40 km/h</span></div>
+                  <ul class="s-list">
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                      <span>Obligatorio rodar en fila india relevando al líder frecuentemente.</span>
+                    </li>
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                      <span>Dosifica el esfuerzo; el gasto de energía (Joules) es masivo.</span>
+                    </li>
+                  </ul>
+                </div>
+                <div class="risk-tier">
+                  <div class="risk-head"><span class="s-tag s-tag--danger">Peligroso</span> <span class="risk-speed">&gt; 40 km/h</span></div>
+                  <ul class="s-list">
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                      <span>Riesgo de desgaste extremo y frustración psicológica.</span>
+                    </li>
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                      <span>Modifica la ruta hacia zonas protegidas o acorta el entrenamiento.</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </details>
+
+            <!-- PANEL 2: COSTADO -->
+            <details class="acc-item" name="safety-acc">
+              <summary class="acc-head">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                  <svg class="s-icon" style="stroke: var(--warn)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+                  <span class="acc-title">Viento de Costado <span class="acc-sub">(Lateral)</span></span>
+                </div>
+                <svg class="acc-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+              </summary>
+              <div class="acc-body">
+                <div class="risk-tier">
+                  <div class="risk-head"><span class="s-tag s-tag--warn">Moderado</span> <span class="risk-speed">15–25 km/h</span></div>
+                  <ul class="s-list">
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                      <span>Sujeta el manillar con firmeza ante ráfagas sorpresa.</span>
+                    </li>
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                      <span>Aplica la técnica del abanico (escalonarse diagonalmente).</span>
+                    </li>
+                  </ul>
+                </div>
+                <div class="risk-tier">
+                  <div class="risk-head"><span class="s-tag s-tag--idle">Alto</span> <span class="risk-speed">25–40 km/h</span></div>
+                  <ul class="s-list">
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="3"></circle></svg>
+                      <span>Prohibido usar ruedas de perfil alto; causan efecto vela severo.</span>
+                    </li>
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                      <span>Inclina ligeramente el peso del cuerpo hacia el viento.</span>
+                    </li>
+                  </ul>
+                </div>
+                <div class="risk-tier">
+                  <div class="risk-head"><span class="s-tag s-tag--danger">Peligroso</span> <span class="risk-speed">&gt; 40 km/h</span></div>
+                  <ul class="s-list">
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                      <span>Riesgo crítico de caída repentina hacia el carril vehicular.</span>
+                    </li>
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                      <span>Evita puentes (ej. Pumarejo) y vías expuestas. Considera abortar.</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </details>
+
+            <!-- PANEL 3: COLA -->
+            <details class="acc-item" name="safety-acc">
+              <summary class="acc-head">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                  <svg class="s-icon" style="stroke: var(--ok)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>
+                  <span class="acc-title">Viento de Cola <span class="acc-sub">(A favor)</span></span>
+                </div>
+                <svg class="acc-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+              </summary>
+              <div class="acc-body">
+                <div class="risk-tier">
+                  <div class="risk-head"><span class="s-tag s-tag--warn">Moderado</span> <span class="risk-speed">15–25 km/h</span></div>
+                  <ul class="s-list">
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                      <span>Aprovecha altas velocidades sostenidas con mínimo esfuerzo aerodinámico.</span>
+                    </li>
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                      <span>Puedes mantener una postura erguida (escaladores) y relajada.</span>
+                    </li>
+                  </ul>
+                </div>
+                <div class="risk-tier">
+                  <div class="risk-head"><span class="s-tag s-tag--idle">Alto</span> <span class="risk-speed">25–40 km/h</span></div>
+                  <ul class="s-list">
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                      <span>Velocidad inusual. Anticipa baches u obstáculos con más tiempo.</span>
+                    </li>
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                      <span>Al entrar a curvas, reduce la velocidad mucho antes de lo habitual.</span>
+                    </li>
+                  </ul>
+                </div>
+                <div class="risk-tier">
+                  <div class="risk-head"><span class="s-tag s-tag--danger">Peligroso</span> <span class="risk-speed">&gt; 40 km/h</span></div>
+                  <ul class="s-list">
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                      <span>Las ráfagas aumentan masivamente tu distancia de frenado.</span>
+                    </li>
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                      <span>Empuje extra de inercia en curvas; mantén control técnico absoluto.</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </details>
+
+            <!-- PANEL 4: DIAGONAL -->
+            <details class="acc-item" name="safety-acc">
+              <summary class="acc-head">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                  <svg class="s-icon" style="stroke: var(--idle)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"></line><polyline points="7 7 17 7 17 17"></polyline></svg>
+                  <span class="acc-title">Diagonal / Cruzado</span>
+                </div>
+                <svg class="acc-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+              </summary>
+              <div class="acc-body">
+                <div class="risk-tier">
+                  <div class="risk-head"><span class="s-tag s-tag--warn">Moderado</span> <span class="risk-speed">15–25 km/h</span></div>
+                  <ul class="s-list">
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h4l2-9 5 18 3-10 4 3h4"></path></svg>
+                      <span>Identifica si el vector te frena o te empuja para anticipar tu esfuerzo.</span>
+                    </li>
+                  </ul>
+                </div>
+                <div class="risk-tier">
+                  <div class="risk-head"><span class="s-tag s-tag--idle">Alto</span> <span class="risk-speed">25–40 km/h</span></div>
+                  <ul class="s-list">
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                      <span>Cuidado con el efecto túnel al rebasar camiones o salir de zonas de sombra de edificios.</span>
+                    </li>
+                  </ul>
+                </div>
+                <div class="risk-tier">
+                  <div class="risk-head"><span class="s-tag s-tag--danger">Peligroso</span> <span class="risk-speed">&gt; 40 km/h</span></div>
+                  <ul class="s-list">
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                      <span>Combinación desgastante de fuerte resistencia e inestabilidad lateral.</span>
+                    </li>
+                    <li>
+                      <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                      <span>Rueda con extrema precaución. Considera entrenar indoor (rodillo).</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </details>
+
+          </div>
+        </div>
+
+        <!-- Capa del Túnel de Viento -->
+        <div class="tunnel" id="tunnel" role="img" aria-label="Ciclista visto desde arriba apuntando al norte con líneas de viento incidiendo desde la dirección real del viento." aria-hidden="true">
+          <!-- capa 1: instrumentación estática -->
+          <svg class="tunnel__layer" viewBox="-300 -300 600 600" aria-hidden="true">
+            <circle class="ring" r="266" />
+            <circle class="ring ring--dash" r="180" />
+            <circle class="ring ring--dash" r="90" />
+            <g class="grid"><line x1="-266" y1="0" x2="266" y2="0" /><line x1="0" y1="-266" x2="0" y2="266" /></g>
+            <g id="tunnel-ticks"></g>
+          </svg>
+          <!-- capa 2: partículas de viento -->
+          <canvas class="tunnel__layer" id="wind-canvas" aria-hidden="true"></canvas>
+          <!-- capa 3: ciclista, cardinales y vector de viento -->
+          <svg class="tunnel__layer" viewBox="-300 -300 600 600" aria-hidden="true">
+            <g class="cardinals">
+              <text x="0" y="-285" class="cardinal cardinal--n">N</text>
+              <text x="285" y="0">E</text>
+              <text x="0" y="285">S</text>
+              <text x="-285" y="0">W</text>
+            </g>
+            <g id="wind-arrow" class="wind-arrow">
+              <line x1="0" y1="-258" x2="0" y2="-206" />
+              <path d="M0 -190 L-8 -208 L8 -208 Z" />
+              <line class="wind-arrow__cap" x1="-10" y1="-258" x2="10" y2="-258" />
+            </g>
+            <g class="rider" transform="scale(1.25)">
+              <ellipse class="rider__wheel" cx="0" cy="-36" rx="3.2" ry="20" />
+              <ellipse class="rider__wheel" cx="0" cy="36" rx="3.2" ry="20" />
+              <line class="rider__frame" x1="0" y1="-36" x2="0" y2="36" />
+              <line class="rider__frame" x1="-13" y1="-25" x2="13" y2="-25" />
+              <path class="rider__arm" d="M-8 -8 L-12 -25 M8 -8 L12 -25" />
+              <ellipse class="rider__leg" cx="-4.5" cy="14" rx="3" ry="11" />
+              <ellipse class="rider__leg" cx="4.5" cy="14" rx="3" ry="11" />
+              <path class="rider__torso" d="M-10 -9 Q0 -15 10 -9 L7 14 Q0 17 -7 14 Z" />
+              <ellipse class="rider__head" cx="0" cy="-13" rx="5.5" ry="7" />
+            </g>
+          </svg>
+        </div>
+
+        <!-- Panel flotante: Hora óptima -->
+        <div class="optimal optimal--floating" aria-labelledby="opt-title">
+          <header class="decision__head">
+            <h2 class="lbl" id="opt-title">Hora óptima de salida</h2>
+            <span class="decision__hint">F aero · 25 km/h</span>
+          </header>
+          <div class="opt" id="opt-bars"></div>
+          <p class="opt__verdict" id="opt-verdict" aria-live="polite">—</p>
+        </div>
+
+        <!-- ============================================================
+             VISTA SMARTWATCH (Watch Mode OLED)
+             ============================================================ -->
+        <div class="watch-ui" id="watch-ui" aria-label="Vista táctica para Smartwatch">
+          <!-- Cabecera táctica del reloj -->
+          <div class="watch-header">
+            <div class="watch-pill watch-pill--heading">
+              <span class="watch-led"></span>
+              <span class="watch-pill__lbl">RUMBO</span>
+              <strong id="watch-heading-text">000° N</strong>
+            </div>
+            <div class="watch-pill watch-pill--speed">
+              <span class="watch-pill__lbl">VELOCIDAD</span>
+              <strong id="watch-speed-text">25.0 <small>km/h</small></strong>
+            </div>
+            <button type="button" class="watch-exit-btn" id="watch-exit-btn" aria-label="Salir de Modo Reloj" title="Volver a Modo Web">✕ Web</button>
+          </div>
+
+          <!-- Métrica masiva de Fuerza Aerodinámica -->
+          <div class="watch-force-overlay">
+            <span class="watch-force-lbl">FUERZA AERODINÁMICA</span>
+            <div class="watch-force-numwrap">
+              <span class="watch-force-num" id="watch-force-num">—</span>
+              <span class="watch-force-unit">N</span>
+            </div>
+            <div class="watch-badge" id="watch-attack-badge">
+              <span id="watch-attack-tag">VIENTO FRONTAL</span>
+              <span class="watch-badge__sub" id="watch-attack-angle">0° rel.</span>
+            </div>
+          </div>
+
+          <!-- Barra táctica inferior: desglose de potencia y componentes -->
+          <div class="watch-telemetry">
+            <div class="watch-tele-item">
+              <span class="watch-tele-lbl">COMP. FRONTAL</span>
+              <strong id="watch-head-comp">—</strong>
+            </div>
+            <div class="watch-tele-item">
+              <span class="watch-tele-lbl">COMP. LATERAL</span>
+              <strong id="watch-cross-comp">—</strong>
+            </div>
+            <div class="watch-tele-item">
+              <span class="watch-tele-lbl">POTENCIA EXTRA</span>
+              <strong id="watch-power-extra">—</strong>
+            </div>
+          </div>
+
+          <!-- Controles de simulación / prueba de rumbo -->
+          <div class="watch-controls">
+            <label class="watch-slider-lbl" for="watch-heading-slider">
+              <span>Simular Rumbo:</span> <strong id="watch-heading-deg">000° N</strong>
+            </label>
+            <input type="range" id="watch-heading-slider" min="0" max="359" value="0" step="1" />
+            <div class="watch-sim-quick">
+              <button type="button" class="btn-quick-hd" data-deg="0">N (0°)</button>
+              <button type="button" class="btn-quick-hd" data-deg="90">E (90°)</button>
+              <button type="button" class="btn-quick-hd" data-deg="180">S (180°)</button>
+              <button type="button" class="btn-quick-hd" data-deg="270">W (270°)</button>
+              <button type="button" class="btn-test-alert" id="watch-test-alert-btn">⚡ Probar Alerta</button>
+            </div>
+          </div>
+
+          <!-- Takeover Táctico a Pantalla Completa (4s con vibración) -->
+          <div class="watch-takeover" id="watch-takeover" role="alert" aria-live="assertive" hidden>
+            <div class="watch-takeover__card">
+              <div class="watch-takeover__icon" id="watch-takeover-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              </div>
+              <span class="watch-takeover__tag" id="watch-takeover-tag">⚠️ ALERTA TÁCTICA</span>
+              <h2 class="watch-takeover__title" id="watch-takeover-title">¡VIENTO CRUZADO PELIGROSO!</h2>
+              <div class="watch-takeover__val" id="watch-takeover-val">24.5 km/h</div>
+              <p class="watch-takeover__action" id="watch-takeover-action">SUJETA FIRME EL MANILLAR</p>
+              <p class="watch-takeover__hint" id="watch-takeover-hint">Riesgo inminente de desestabilización lateral. Reduce perfil y mantén control.</p>
+              <div class="watch-takeover__timer">
+                <div class="watch-takeover__timer-fill"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <footer class="readout" aria-live="off">
+        <div><span class="lbl">Viento desde</span><strong id="ro-dir">—</strong></div>
+        <div><span class="lbl">Ciclista</span><strong id="ro-rider">▲ N 000° · 25 km/h</strong></div>
+        <div><span class="lbl">Vista</span><strong id="ro-time">—</strong></div>
+      </footer>
+    </section>
+  </main>
+
+  <!-- ============================================================
+       BLOQUE 3 · TOMA DE DECISIONES
+       ============================================================ -->
+  <section class="decision" aria-label="Toma de decisiones">
+    <div class="timeline" aria-labelledby="tl-title">
+      <header class="decision__head">
+        <h2 class="lbl" id="tl-title">Línea de tiempo · próximas 12 h</h2>
+        <span class="decision__hint">Pasa el cursor para previsualizar · mueve el control para fijar la hora</span>
+      </header>
+      <div class="tl" id="tl">
+        <div class="tl__cols" id="tl-cols" role="group" aria-label="Velocidad del viento por hora"></div>
+        <input class="tl__slider" id="tl-slider" type="range" min="0" max="12" step="1" value="0" aria-label="Hora de predicción" aria-valuetext="Ahora" />
+      </div>
+      <p class="tl__legend" aria-hidden="true">
+        <span><i class="sw sw--bar"></i>velocidad</span>
+        <span><i class="sw sw--gust"></i>ráfaga</span>
+        <span><i class="sw sw--dir"></i>▼ hacia dónde sopla</span>
+      </p>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <p>Datos: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a> (CC BY 4.0) · ρ = 1.18 kg/m³ · Auto-actualización 5 min · <span id="next-refresh">—</span></p>
+  </footer>
+</div>
+
+<div class="sr-only" aria-live="polite" id="sr-status"></div>
+<script src="app.js?v=6" defer></script>
+</body>
+</html>
