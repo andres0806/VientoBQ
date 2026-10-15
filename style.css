@@ -1153,3 +1153,19 @@ body.watch-mode .watch-ui {
   from { transform: scaleX(1); }
   to { transform: scaleX(0); }
 }
+
+/* ---------- Peso opcional (ciclista + bici) ---------- */
+.mass { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; margin: 10px 0 4px; padding-top: 10px; border-top: 1px solid var(--line); }
+.mass__field { display: flex; flex-direction: column; gap: 4px; }
+.mass__field label { font-size: 10.5px; font-weight: 600; color: var(--text-3); }
+.mass__field input {
+  height: 32px; padding: 0 8px; font: 600 12px var(--font); color: var(--text);
+  background: var(--bg-1); border: 1px solid var(--line-2); border-radius: var(--r);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.mass__field input::placeholder { color: var(--text-4); font-weight: 400; }
+.mass__field input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(6, 182, 212, .25); }
+.mass__field input[aria-invalid="true"] { border-color: var(--danger); }
+.mass__note { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; margin: 0; font-size: 10.5px; color: var(--text-3); }
+.mass__reset { min-height: 24px; padding: 0 8px; font: 600 10.5px var(--font); color: var(--text); background: transparent; border: 1px solid var(--line-2); border-radius: var(--r); cursor: pointer; transition: background .15s ease; }
+.mass__reset:hover { background: var(--bg-2); }

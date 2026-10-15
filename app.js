@@ -39,6 +39,9 @@
     RHO: 1.18,   // densidad del aire [kg/m³]
     CDA: 0.32,   // área frontal efectiva × coef. de arrastre, ciclista en ruta [m²]
     G: 9.81,
+    CRR: 0.005,          // coef. de rodadura, neumático de ruta sobre asfalto
+    RIDER_KG: 75,        // masa estándar del ciclista [kg]
+    BIKE_KG: 10,         // masa estándar de la bicicleta [kg]
   });
 
   const LOCATIONS = Object.freeze([
@@ -85,17 +88,21 @@
      * Carga aerodinámica sobre el ciclista que avanza a `riderMs`.
      * Velocidad del aire respecto a la bici a lo largo de la marcha: u + v_frontal.
      */
-    cyclistLoad(windMs, dirDeg, riderMs = Physics.kmhToMs(CONFIG.RIDER_SPEED_KMH), headingDeg = CONFIG.RIDER_HEADING_DEG) {
+    cyclistLoad(windMs, dirDeg, riderMs = Physics.kmhToMs(CONFIG.RIDER_SPEED_KMH), headingDeg = CONFIG.RIDER_HEADING_DEG, massKg = totalMassKg()) {
       const { head, cross } = Physics.components(windMs, dirDeg, headingDeg);
       const along = riderMs + head;
       const force = Physics.dragForce(along);
       const calm = Physics.dragForce(riderMs);
+      const rolling = PHYSICS.CRR * massKg * PHYSICS.G;   // F_r = μ · m · g (terreno plano)
+      const total = force + rolling;
+      const power = Math.max(0, total) * riderMs;          // P = F · v
       return {
         head, cross,
-        force, calm,
+        force, calm, rolling, total, massKg,
         deltaForce: force - calm,
         ratio: force / calm,
-        power: force * riderMs,                      // P = F · v
+        power,
+        wPerKg: power / massKg,
         apparentSpeed: Math.hypot(cross, along),     // |v_aparente|
         apparentAngle: (deg(Math.atan2(cross, along)) + 360) % 360,
       };
@@ -215,7 +222,15 @@
     isWatchMode: false,
     watchHeading: 0,
     watchSpeedKmh: CONFIG.RIDER_SPEED_KMH,
+    riderKg: null,       // null = usar valor estándar
+    bikeKg: null,
   };
+
+  /** Masa total del sistema ciclista + bici [kg]; vacío/inválido → estándar. */
+  function validMass(v, lo, hi) { return Number.isFinite(v) && v >= lo && v <= hi ? v : null; }
+  function totalMassKg() {
+    return (state.riderKg ?? PHYSICS.RIDER_KG) + (state.bikeKg ?? PHYSICS.BIKE_KG);
+  }
 
   const viewIndex = () => (state.hover ?? state.selected);
   const viewPoint = () => state.series[viewIndex()] || null;
@@ -533,7 +548,8 @@
     dEl.innerHTML = `${L.deltaForce >= 0 ? "+" : "−"}${f2.format(Math.abs(L.deltaForce))} N<em>${pct >= 0 ? "+" : "−"}${f0.format(Math.abs(pct))}%</em>`;
     dEl.dataset.level = pct < 10 ? "ok" : pct < 40 ? "warn" : "danger";
     setText("t-power", `${f0.format(L.power)} W`);
-    setText("t-work", `${f1.format((L.force * dist_m()) / 1000)} kJ`);
+    setText("t-power-sub", `${f2.format(L.wPerKg)} W/kg · ${f0.format(L.massKg)} kg`);
+    setText("t-work", `${f1.format((Math.max(0, L.total) * dist_m()) / 1000)} kJ`);
 
     // Estado general
     const st = routeStatus(p);
@@ -649,25 +665,8 @@
   }
 
   /* ------------------------------------------------------------------
-     7. CSV, ACTUALIZACIÓN Y ARRANQUE
+     7. ACTUALIZACIÓN Y ARRANQUE
      ------------------------------------------------------------------ */
-  const csvCell = (v) => { const s = String(v ?? ""); return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-
-  function exportCSV() {
-    if (!state.series.length) return;
-    const head = ["fecha_hora_local", "offset_h", "velocidad_ms", "velocidad_kmh", "rafaga_ms", "direccion_deg", "direccion", "comp_frontal_ms", "comp_lateral_ms", "potencia_eolica_wm2", "fuerza_aero_N", "potencia_aero_W"];
-    const rows = state.series.map((p) => {
-      const L = Physics.cyclistLoad(p.speedMs, p.dirDeg);
-      return [p.iso, p.offset, p.speedMs.toFixed(3), Physics.msToKmh(p.speedMs).toFixed(2), p.gustMs.toFixed(3), p.dirDeg, cardinalOf(p.dirDeg),
-        L.head.toFixed(3), L.cross.toFixed(3), Physics.windPowerDensity(p.speedMs).toFixed(3), L.force.toFixed(3), L.power.toFixed(2)];
-    });
-    const csv = [head, ...rows].map((r) => r.map(csvCell).join(",")).join("\r\n");
-    const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" }));
-    const a = Object.assign(document.createElement("a"), { href: url, download: `vientobq_${state.location.id}_${state.series[0].iso.replace(/[-:]/g, "").replace("T", "-")}.csv` });
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    $("sr-status").textContent = `CSV exportado con ${rows.length} registros.`;
-  }
 
   function scheduleRefresh() {
     clearTimeout(state.timer);
@@ -705,7 +704,6 @@
       renderLive();
       setLive("live", "EN VIVO");
       $("error-banner").hidden = true;
-      $("export-btn").disabled = false;
       $("sr-status").textContent = `${state.location.name}: ${f1.format(Physics.msToKmh(series[0].speedMs))} km/h desde el ${cardinalOf(series[0].dirDeg)}.`;
       document.dispatchEvent(new CustomEvent("vientobq:update", { detail: window.VientoBQ.getSnapshot() }));
     } catch (err) {
@@ -1069,6 +1067,26 @@
     clearTimeout(takeoverTimer);
   }
 
+  /** Campos de peso: vacío o fuera de rango → valor estándar (se muestra como placeholder). */
+  function wireMassInputs() {
+    const rider = $("in-rider-kg"), bike = $("in-bike-kg"), reset = $("mass-reset");
+    if (!rider || !bike) return;
+    const apply = () => {
+      const r = rider.value.trim() === "" ? null : validMass(Number(rider.value.replace(",", ".")), 30, 200);
+      const b = bike.value.trim() === "" ? null : validMass(Number(bike.value.replace(",", ".")), 3, 40);
+      state.riderKg = r; state.bikeKg = b;
+      rider.setAttribute("aria-invalid", String(rider.value.trim() !== "" && r === null));
+      bike.setAttribute("aria-invalid", String(bike.value.trim() !== "" && b === null));
+      const usingDefault = r === null && b === null;
+      setText("mass-note", usingDefault ? `Usando valores estándar (${PHYSICS.RIDER_KG} + ${PHYSICS.BIKE_KG} kg)` : `Masa total: ${f1.format(totalMassKg())} kg`);
+      if (state.series.length) { renderView(); renderOptimal(); }
+    };
+    rider.addEventListener("input", apply);
+    bike.addEventListener("input", apply);
+    if (reset) reset.addEventListener("click", () => { rider.value = ""; bike.value = ""; apply(); });
+    apply();
+  }
+
   function init() {
     let saved = null;
     try { saved = localStorage.getItem(CONFIG.STORAGE_KEY); } catch { /* sin storage */ }
@@ -1085,7 +1103,7 @@
     $("location-select").addEventListener("change", (e) => setLocation(e.target.value));
     $("refresh-btn").addEventListener("click", () => refresh("manual"));
     $("retry-btn").addEventListener("click", () => refresh("manual"));
-    $("export-btn").addEventListener("click", exportCSV);
+    wireMassInputs();
 
     // Controles de Watch Mode
     const watchBtn = $("watch-btn");
